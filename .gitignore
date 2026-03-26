@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Project Specific
+logs/
+*.log
+
+# Sensitive
+config.yaml
+# (Suggestion: Keep config.yaml locally, but you can upload a config.example.yaml)

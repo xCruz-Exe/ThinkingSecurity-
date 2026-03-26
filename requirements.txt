@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+httpx
+slowapi
+pyyaml
+jinja2
+python-multipart

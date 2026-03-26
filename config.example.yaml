@@ -1,0 +1,24 @@
+# Thinking Security Example Configuration
+# Copy this to config.yaml and edit it.
+
+proxy:
+  target_url: "http://localhost:8000"
+  listen_port: 8080
+  hidden_origin_header: "X-Forwarded-By-Thinking"
+
+security:
+  waf_enabled: true
+  rate_limit_enabled: true
+  js_challenge_enabled: true
+  sensitivity: 7
+  max_requests_per_minute: 60
+  bot_score_threshold: 0.8
+  block_duration_seconds: 3600
+  max_404_per_minute: 10
+
+blocklist:
+  ips: []
+  user_agents: ["curl", "python-requests"]
+
+allowlist:
+  ips: ["127.0.0.1"]
