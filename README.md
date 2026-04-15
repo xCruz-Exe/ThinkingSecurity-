@@ -2,7 +2,7 @@
 title: Thinking Security Bot
 emoji: 🛡️
 colorFrom: red
-colorTo: black
+colorTo: indigo
 sdk: docker
 pinned: false
 ---
