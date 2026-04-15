@@ -9,3 +9,8 @@ fastapi
 uvicorn
 httpx
 python-multipart
+imagehash
+Pillow
+easyocr
+numpy
+aiohttp
