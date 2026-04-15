@@ -210,6 +210,13 @@ async def logs(ctx):
     await ctx.send(f"```\n{output or 'No logs yet.'}\n```")
 
 @bot.command()
+@commands.has_permissions(manage_messages=True)
+async def clear(ctx, amount: int = 100):
+    """Clears a specified amount of messages."""
+    await ctx.channel.purge(limit=amount + 1)
+    msg = await ctx.send(f"🧹 Cleared {amount} messages.", delete_after=5)
+
+@bot.command()
 async def ping(ctx):
     await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
 
