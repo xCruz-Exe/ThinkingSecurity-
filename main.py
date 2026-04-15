@@ -221,8 +221,21 @@ def run(): app.run(host='0.0.0.0', port=7860)
 def keep_alive(): threading.Thread(target=run).start()
 
 if __name__ == '__main__':
-    if TOKEN:
-        keep_alive()
-        bot.run(TOKEN)
+    keep_alive()  # Start Flask first so HF health check passes
+    
+    if TOKEN and TOKEN.strip():
+        print("🚀 Starting Bot...")
+        try:
+            bot.run(TOKEN)
+        except Exception as e:
+            print(f"❌ CRITICAL ERROR: {e}")
+            # Keep the thread alive so the user can read the log on HF
+            import time
+            while True:
+                time.sleep(10)
     else:
-        print("Set BOT_TOKEN in .env!")
+        print("❌ ERROR: BOT_TOKEN is missing! Please set it in Hugging Face Secrets.")
+        # Keep alive for log viewing
+        import time
+        while True:
+            time.sleep(10)
