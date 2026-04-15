@@ -1,3 +1,12 @@
+---
+title: Thinking Security Bot
+emoji: 🛡️
+colorFrom: red
+colorTo: black
+sdk: docker
+pinned: false
+---
+
 # Thinking Security - Website Protection Engine
 
 Thinking Security is a high-performance security reverse proxy designed to safeguard your web applications against modern threats. Built with a focus on simplicity and efficiency, it acts as a robust shield, filtering malicious traffic before it ever reaches your origin server.
