@@ -1,7 +1,11 @@
+discord.py
+python-dotenv
+flask
+pyyaml
+requests
+jinja2
+slowapi
 fastapi
 uvicorn
 httpx
-slowapi
-pyyaml
-jinja2
 python-multipart
