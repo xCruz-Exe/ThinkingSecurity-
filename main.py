@@ -104,6 +104,13 @@ async def apply_strike(member, reason, message=None):
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('Thinking Security System Active')
+    
+    # Sync slash commands
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Synced {len(synced)} slash commands.")
+    except Exception as e:
+        print(f"❌ Slash sync error: {e}")
 
 @bot.event
 async def on_member_join(member):
@@ -215,6 +222,14 @@ async def clear(ctx, amount: int = 100):
     """Clears a specified amount of messages."""
     await ctx.channel.purge(limit=amount + 1)
     msg = await ctx.send(f"🧹 Cleared {amount} messages.", delete_after=5)
+
+@bot.hybrid_command(name="clear_chat", description="Clears messages from the chat")
+@commands.has_permissions(manage_messages=True)
+async def clear_chat(ctx: commands.Context, amount: int = 100):
+    """Slash/Prefix command to clear chat messages."""
+    await ctx.defer(ephemeral=True)
+    deleted = await ctx.channel.purge(limit=amount)
+    await ctx.send(f"🧹 Cleared {len(deleted)} messages lassanata!", ephemeral=True)
 
 @bot.command()
 async def ping(ctx):
