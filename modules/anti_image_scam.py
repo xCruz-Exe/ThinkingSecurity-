@@ -5,8 +5,15 @@ import aiohttp
 import easyocr
 import numpy as np
 
-# Initialize OCR
-reader = easyocr.Reader(['en'])
+# Global reader variable
+reader = None
+
+def get_reader():
+    global reader
+    if reader is None:
+        print("📥 Initializing EasyOCR... This might take a few minutes for the first time.")
+        reader = easyocr.Reader(['en'])
+    return reader
 
 SCAM_KEYWORDS = ["voxwin", "mr beast", "mrbeast", "usdt", "crypto", "bonus", "withdrawal"]
 
@@ -23,7 +30,8 @@ async def is_scam_image(attachment):
                     
                     # OCR Check
                     img_np = np.array(img_pil)
-                    results = reader.readtext(img_np)
+                    ocr_reader = get_reader()
+                    results = ocr_reader.readtext(img_np)
                     detected_text = " ".join([res[1].lower() for res in results])
                     
                     for keyword in SCAM_KEYWORDS:
