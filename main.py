@@ -17,7 +17,8 @@ import sys
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
+LOG_CHANNEL_ID_RAW = os.getenv('LOG_CHANNEL_ID')
+LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_RAW) if LOG_CHANNEL_ID_RAW and LOG_CHANNEL_ID_RAW.strip().isdigit() else None
 PREFIX = "!"
 
 # Setup logging to capture terminal output for !logs command
@@ -65,9 +66,12 @@ async def send_log(guild, embed):
     """Helper to send logs to the configured channel."""
     channel_id = get_config("log_channel")
     if channel_id:
-        channel = guild.get_channel(int(channel_id))
-        if channel:
-            await channel.send(embed=embed)
+        try:
+            channel = guild.get_channel(int(channel_id))
+            if channel:
+                await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Log Error: {e}")
 
 async def apply_strike(member, reason, message=None):
     """Apply a strike and handle punishments."""
