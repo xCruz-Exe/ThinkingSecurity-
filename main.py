@@ -1,152 +1,224 @@
-import httpx
-import yaml
-import logging
-import time
+import discord
+from discord.ext import commands
+from discord.ui import Button, View
 import os
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
-from security.waf import WAF
-from security.challenges import ChallengeManager
+from dotenv import load_dotenv
+import json
+import datetime
+import asyncio
+import re
+import threading
+from flask import Flask
+from modules import anti_phishing, anti_spam, anti_image_scam
+import logging
+import io
+import sys
 
-# Ensure logs directory exists
-if not os.path.exists("logs"):
-    os.makedirs("logs")
+# Load environment variables
+load_dotenv()
+TOKEN = os.getenv('BOT_TOKEN')
+LOG_CHANNEL_ID = os.getenv('LOG_CHANNEL_ID')
+PREFIX = "!"
 
-# Load config
-try:
-    with open("config.yaml", "r") as f:
-        config = yaml.safe_load(f)
-except FileNotFoundError:
-    config = {
-        "proxy": {"target_url": "http://localhost:8000", "listen_port": 8080, "hidden_origin_header": "X-Shielded"},
-        "security": {"waf_enabled": True, "rate_limit_enabled": True, "js_challenge_enabled": True, "sensitivity": 7, "max_404_per_minute": 10},
-        "blocklist": {"ips": [], "user_agents": ["curl", "python-requests"]},
-        "allowlist": {"ips": ["127.0.0.1"]}
-    }
+# Setup logging to capture terminal output for !logs command
+log_stream = io.StringIO()
+logging.basicConfig(level=logging.INFO, stream=log_stream, format='%(asctime)s: %(message)s')
+class WebLogger(io.StringIO):
+    def write(self, s):
+        log_stream.write(s)
+        sys.__stdout__.write(s)
+sys.stdout = WebLogger()
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, 
-                    handlers=[
-                        logging.FileHandler("logs/shield.log"),
-                        logging.StreamHandler()
-                    ],
-                    format="%(asctime)s - %(levelname)s - %(message)s")
+# Setup Bot
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
 
-app = FastAPI()
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+class ThinkingSecurityBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix=PREFIX, 
+            intents=intents,
+            help_command=commands.DefaultHelpCommand(no_category="Thinking Security Bot Commands")
+        )
 
-waf = WAF(sensitivity=config['security']['sensitivity'])
-challenge_mgr = ChallengeManager()
+    async def setup_hook(self):
+        # Database/Config Initialization if needed
+        pass
 
-# Reputation tracking (in-memory)
-reputation = {} # {ip: {"404_count": 0, "last_reset": time}}
+bot = ThinkingSecurityBot()
 
-@app.middleware("http")
-async def security_middleware(request: Request, call_next):
-    client_ip = request.client.host
+# --- DATABASE MOCK (Using simple JSON or config for demo) ---
+CONFIG = {"log_channel": LOG_CHANNEL_ID, "strikes": {}}
+
+def set_config(key, value): CONFIG[key] = value
+def get_config(key): return CONFIG.get(key)
+def add_strike(user_id, reason):
+    user_id = str(user_id)
+    if user_id not in CONFIG["strikes"]: CONFIG["strikes"][user_id] = []
+    CONFIG["strikes"][user_id].append({"reason": reason, "time": str(datetime.datetime.now())})
+    return len(CONFIG["strikes"][user_id])
+
+# ─── SECURITY HELPER LOGIC ────────────────────────────────────────
+
+async def send_log(guild, embed):
+    """Helper to send logs to the configured channel."""
+    channel_id = get_config("log_channel")
+    if channel_id:
+        channel = guild.get_channel(int(channel_id))
+        if channel:
+            await channel.send(embed=embed)
+
+async def apply_strike(member, reason, message=None):
+    """Apply a strike and handle punishments."""
+    strike_count = add_strike(member.id, reason)
     
-    # Skip security for allowlisted IPs
-    if client_ip in config['allowlist']['ips']:
-        return await call_next(request)
-
-    # 1. IP Blocklist check
-    if client_ip in config['blocklist']['ips']:
-        logging.warning(f"Blocked request from blacklisted IP: {client_ip}")
-        return Response(content="Your IP has been blocked by Thinking Security.", status_code=403)
+    embed = discord.Embed(
+        title="⚠️ Security Alert: Strike Applied",
+        color=discord.Color.orange(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.add_field(name="User", value=f"{member.mention} ({member.id})", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Total Strikes", value=str(strike_count), inline=True)
+    embed.set_footer(text="Thinking Security Bot")
     
-    # 2. User-Agent check
-    ua = request.headers.get("user-agent", "").lower()
-    if any(bot.lower() in ua for bot in config['blocklist']['user_agents']):
-        logging.warning(f"Bot detected: {ua} from {client_ip}")
-        return Response(content="Access denied for automated tools.", status_code=403)
+    if message:
+        embed.add_field(name="Message Content", value=message.content[:1024], inline=False)
+        await message.delete()
 
-    # 3. WAF inspection (Deeper inspection)
-    # Check query params and path
-    request_data = f"{request.url.path} {request.url.query}"
-    if waf.inspect_content(request_data):
-        logging.error(f"WAF Blocked malicious URL/Query from {client_ip}")
-        return Response(content="Malicious activity detected (WAF).", status_code=403)
-        
-    # 4. JS Challenge
-    if config['security']['js_challenge_enabled']:
-        # To avoid infinite loop, we should check if they just solved it
-        # Real version would use a signed token or JWT
-        if not request.cookies.get("shield_verified"):
-             logging.info(f"Issuing JS Challenge to {client_ip} (Thinking)")
-             response = challenge_mgr.get_challenge_page(str(request.url))
-             # Setting a temporary bypass cookie for demonstration
-             response.set_cookie(key="shield_verified", value="true", max_age=3600)
-             return response
+    await send_log(member.guild, embed)
 
-    try:
-        response = await call_next(request)
-    except Exception as e:
-        logging.error(f"Internal Middleware Error: {str(e)}")
-        return JSONResponse(content={"error": "Internal security layer error"}, status_code=500)
+    if strike_count >= 3:
+        await member.timeout(discord.utils.utcnow() + datetime.timedelta(hours=24), reason="3+ Security Strikes")
+        punish_embed = discord.Embed(title="🔇 User Timed Out", description=f"{member.mention} timed out for 24h.", color=discord.Color.red())
+        await send_log(member.guild, punish_embed)
+
+# ─── BOT EVENTS ───────────────────────────────────────────────────
+
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+    print('Thinking Security System Active')
+
+@bot.event
+async def on_member_join(member):
+    """Log when a new member joins the server."""
+    embed = discord.Embed(
+        title="📥 New Member Joined",
+        description=f"{member.mention} has joined the server.",
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_thumbnail(url=member.display_avatar.url if member.display_avatar else None)
+    embed.add_field(name="User", value=f"{member.name}", inline=True)
+    embed.add_field(name="ID", value=member.id, inline=True)
+    embed.set_footer(text="Thinking Security Bot | Join Log")
     
-    # 5. Anomaly Detection (404 tracking to prevent directory brute-force)
-    if response.status_code == 404:
-        now = time.time()
-        rep = reputation.get(client_ip, {"404_count": 0, "last_reset": now})
-        if now - rep["last_reset"] > 60:
-            rep["404_count"] = 0
-            rep["last_reset"] = now
-        rep["404_count"] += 1
-        reputation[client_ip] = rep
-        if rep["404_count"] > config['security'].get('max_404_per_minute', 15):
-            logging.critical(f"IP {client_ip} auto-blocked for too many 404s (Brute force attempt)")
-            config['blocklist']['ips'].append(client_ip) 
-            
-    return response
+    await send_log(member.guild, embed)
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def proxy_handler(request: Request, path: str):
-    target_url = f"{config['proxy']['target_url']}/{path}"
+@bot.event
+async def on_message_delete(message):
+    """Log when a single message is deleted."""
+    if message.author.bot: return  # Ignore bot deletions
     
-    async with httpx.AsyncClient() as client:
-        # Prepare headers
-        headers = dict(request.headers)
-        headers.pop("host", None) # Let httpx handle host
-        headers["X-Forwarded-For"] = request.client.host
-        headers["X-Forwarded-By"] = "Thinking-Security"
-        headers["X-Security-Level"] = "Premium"
-        
-        try:
-            # Get body
-            body = await request.body()
-            
-            proxy_resp = await client.request(
-                method=request.method,
-                url=target_url,
-                headers=headers,
-                params=request.query_params,
-                content=body,
-                follow_redirects=True,
-                timeout=60.0 # Increased timeout for slow backend
-            )
-            
-            # Filter response headers to avoid double headers
-            resp_headers = dict(proxy_resp.headers)
-            resp_headers.pop("content-encoding", None) # Let FastAPI re-encode
-            resp_headers.pop("content-length", None)
-            
-            return Response(
-                content=proxy_resp.content,
-                status_code=proxy_resp.status_code,
-                headers=resp_headers
-            )
-        except httpx.ConnectError:
-            return JSONResponse(content={"error": "Origin server unreachable. Check target_url in config.yaml"}, status_code=502)
-        except Exception as e:
-            logging.error(f"Proxy error: {str(e)}")
-            return JSONResponse(content={"error": "ShieldProxy could not complete the request"}, status_code=502)
+    embed = discord.Embed(
+        title="🗑️ Message Deleted",
+        description=f"A message from {message.author.mention} was deleted in {message.channel.mention}.",
+        color=discord.Color.red(),
+        timestamp=discord.utils.utcnow()
+    )
+    if message.content:
+        embed.add_field(name="Content", value=message.content[:1024], inline=False)
+    
+    embed.set_footer(text=f"User ID: {message.author.id} | Thinking Security")
+    await send_log(message.guild, embed)
 
-if __name__ == "__main__":
-    import uvicorn
-    print(f"Thinking Security Engine starting on port {config['proxy']['listen_port']}...")
-    uvicorn.run(app, host="0.0.0.0", port=config['proxy']['listen_port'])
+@bot.event
+async def on_bulk_message_delete(messages):
+    """Log when multiple messages are deleted at once."""
+    if not messages: return
+    guild = messages[0].guild
+    channel = messages[0].channel
+    
+    embed = discord.Embed(
+        title="🧹 Bulk Messages Deleted",
+        description=f"**{len(messages)}** messages were cleared/deleted in {channel.mention}.",
+        color=discord.Color.dark_red(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(text="Thinking Security Bot | Audit Log")
+    await send_log(guild, embed)
+
+@bot.event
+async def on_message(message):
+    if message.author.bot or not message.guild: return
+    if message.author.guild_permissions.administrator:
+        await bot.process_commands(message)
+        return
+
+    # 1. Anti-Invite
+    if "discord.gg/" in message.content or "discord.com/invite/" in message.content:
+        await apply_strike(message.author, "Internal Discord Invite", message)
+        return
+
+    # 2. Anti-Spam
+    is_spam, spam_reason = anti_spam.is_spamming(message.author.id, message.content)
+    if is_spam:
+        await apply_strike(message.author, f"Spam: {spam_reason}", message)
+        return
+
+    # 3. Phishing Links
+    urls = anti_phishing.extract_urls(message.content)
+    for url in urls:
+        is_phish, phish_reason = await anti_phishing.is_phishing(url)
+        if is_phish:
+            await apply_strike(message.author, f"Phishing: {phish_reason}", message)
+            return
+
+    # 4. Scam Images
+    if message.attachments:
+        for attachment in message.attachments:
+            is_scam, res = await anti_image_scam.is_scam_image(attachment)
+            if is_scam:
+                await apply_strike(message.author, f"Scam Image: {res}", message)
+                return
+            elif res:
+                debug_embed = discord.Embed(title="🔍 Scanner Debug", description=f"Image from {message.author.mention}\nResult: `{res}`", color=discord.Color.blue())
+                await send_log(message.guild, debug_embed)
+
+    await bot.process_commands(message)
+
+# ─── COMMANDS ─────────────────────────────────────────────────────
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_logs(ctx, channel: discord.TextChannel):
+    set_config("log_channel", channel.id)
+    await ctx.send(f"✅ Security logs will be sent to {channel.mention}")
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def logs(ctx):
+    log_data = log_stream.getvalue()
+    lines = log_data.strip().split('\n')
+    output = "\n".join(lines[-15:])
+    await ctx.send(f"```\n{output or 'No logs yet.'}\n```")
+
+@bot.command()
+async def ping(ctx):
+    await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
+
+# Web Server
+app = Flask('')
+@app.route('/')
+def home(): return "Thinking Security Bot is live!"
+def run(): app.run(host='0.0.0.0', port=7860)
+def keep_alive(): threading.Thread(target=run).start()
+
+if __name__ == '__main__':
+    if TOKEN:
+        keep_alive()
+        bot.run(TOKEN)
+    else:
+        print("Set BOT_TOKEN in .env!")

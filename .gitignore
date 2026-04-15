@@ -13,3 +13,4 @@ logs/
 # Sensitive
 config.yaml
 # (Suggestion: Keep config.yaml locally, but you can upload a config.example.yaml)
+.env
