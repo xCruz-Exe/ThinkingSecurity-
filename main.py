@@ -4,70 +4,88 @@ import os
 from dotenv import load_dotenv
 import asyncio
 import threading
-import aiohttp
 import logging
-import traceback
 from flask import Flask
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
-PREFIX = "!"
+PREFIX = os.getenv('PREFIX', '!')
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s: %(message)s')
+logger = logging.getLogger('ThinkingSecurity')
 
 # Setup Bot
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix=PREFIX, intents=intents)
+intents.members = True
 
-# --- WEB SERVER ---
+class ThinkingSecurityBot(commands.Bot):
+    def __init__(self):
+        super().__init__(
+            command_prefix=PREFIX, 
+            intents=intents,
+            help_command=commands.DefaultHelpCommand(no_category="Thinking Security Bot")
+        )
+
+    async def setup_hook(self):
+        try:
+            await self.tree.sync()
+            print("Slash commands synced successfully.")
+        except Exception as e:
+            print(f"Slash sync error: {e}")
+
+bot = ThinkingSecurityBot()
+
+# --- WEB SERVER (For Render Health Check) ---
 app = Flask('')
+
 @app.route('/')
-def home(): return "Bot Diagnostic Mode"
-def run_web(): app.run(host='0.0.0.0', port=7860)
+def home():
+    return "Thinking Security Bot is Live!"
 
-# --- STARTUP ---
-async def start_bot():
-    print("--- STARTING NETWORK TEST (NO IPV4 FORCE) ---")
-    headers = {'User-Agent': 'Mozilla/5.0'}
+def run_web():
+    # Render provides a PORT environment variable
+    port = int(os.environ.get("PORT", 7860))
+    app.run(host='0.0.0.0', port=port)
+
+# --- EVENTS ---
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
+    print('Thinking Security System Active')
+
+@bot.event
+async def on_message(message):
+    if message.author.bot or not message.guild: return
+    # Skip admins for security checks
+    if message.author.guild_permissions.administrator:
+        await bot.process_commands(message)
+        return
     
-    # NO custom connector here - let the system decide (IPv4 or IPv6)
-    async with aiohttp.ClientSession(headers=headers) as session:
-        print("Testing Google...")
+    # Basic security check example (Anti-Invite)
+    if "discord.gg/" in message.content or "discord.com/invite/" in message.content:
         try:
-            async with session.get("https://www.google.com", timeout=10) as resp:
-                print(f"GOOGLE STATUS: {resp.status}")
-        except Exception as e:
-            print(f"GOOGLE FAILED: {e}")
+            await message.delete()
+            await message.channel.send(f"⚠️ {message.author.mention}, invite links are not allowed here!", delete_after=5)
+        except: pass
+        return
 
-        print("Testing Discord API...")
-        try:
-            async with session.get("https://discord.com/api/v10/gateway", timeout=15) as resp:
-                print(f"DISCORD API STATUS: {resp.status}")
-        except Exception as e:
-            print(f"DISCORD API FAILED: {e}")
+    await bot.process_commands(message)
 
-        if not TOKEN:
-            print("FATAL: TOKEN MISSING")
-            return
+# --- COMMANDS ---
+@bot.command()
+async def ping(ctx):
+    await ctx.send(f"🏓 Pong! {round(bot.latency * 1000)}ms")
 
-        async with bot:
-            print("Attempting login...")
-            try:
-                await asyncio.wait_for(bot.login(TOKEN), timeout=45)
-                print("Login successful! Connecting...")
-                await bot.connect()
-            except Exception:
-                print("BOT LOGIN FAILED!")
-                traceback.print_exc()
-
+# --- MAIN STARTUP ---
 if __name__ == '__main__':
+    # Start web server in a separate thread
     threading.Thread(target=run_web, daemon=True).start()
-    try:
-        asyncio.run(start_bot())
-    except Exception:
-        traceback.print_exc()
-        import time
-        while True: time.sleep(10)
+    
+    if TOKEN:
+        print("Starting Bot...")
+        bot.run(TOKEN)
+    else:
+        print("ERROR: BOT_TOKEN not found!")
