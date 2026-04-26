@@ -24,10 +24,16 @@ PREFIX = "!"
 # Setup logging to capture terminal output for !logs command
 log_stream = io.StringIO()
 logging.basicConfig(level=logging.INFO, stream=log_stream, format='%(asctime)s: %(message)s')
+
 class WebLogger(io.StringIO):
     def write(self, s):
         log_stream.write(s)
-        sys.__stdout__.write(s)
+        try:
+            sys.__stdout__.write(s)
+        except UnicodeEncodeError:
+            # Fallback for consoles that don't support certain characters
+            sys.__stdout__.write(s.encode('ascii', 'replace').decode('ascii'))
+
 sys.stdout = WebLogger()
 
 # Setup Bot
@@ -108,25 +114,10 @@ async def on_ready():
     # Sync slash commands
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} slash commands.")
+        print(f"OK: Synced {len(synced)} slash commands.")
     except Exception as e:
-        print(f"❌ Slash sync error: {e}")
+        print(f"ERROR: Slash sync error: {e}")
 
-@bot.event
-async def on_member_join(member):
-    """Log when a new member joins the server."""
-    embed = discord.Embed(
-        title="📥 New Member Joined",
-        description=f"{member.mention} has joined the server.",
-        color=discord.Color.blue(),
-        timestamp=discord.utils.utcnow()
-    )
-    embed.set_thumbnail(url=member.display_avatar.url if member.display_avatar else None)
-    embed.add_field(name="User", value=f"{member.name}", inline=True)
-    embed.add_field(name="ID", value=member.id, inline=True)
-    embed.set_footer(text="Thinking Security Bot | Join Log")
-    
-    await send_log(member.guild, embed)
 
 @bot.event
 async def on_message_delete(message):
@@ -246,17 +237,17 @@ if __name__ == '__main__':
     keep_alive()  # Start Flask first so HF health check passes
     
     if TOKEN and TOKEN.strip():
-        print("🚀 Starting Bot...")
+        print("Starting Bot...")
         try:
             bot.run(TOKEN)
         except Exception as e:
-            print(f"❌ CRITICAL ERROR: {e}")
+            print(f"CRITICAL ERROR: {e}")
             # Keep the thread alive so the user can read the log on HF
             import time
             while True:
                 time.sleep(10)
     else:
-        print("❌ ERROR: BOT_TOKEN is missing! Please set it in Hugging Face Secrets.")
+        print("ERROR: BOT_TOKEN is missing! Please set it in Hugging Face Secrets.")
         # Keep alive for log viewing
         import time
         while True:
