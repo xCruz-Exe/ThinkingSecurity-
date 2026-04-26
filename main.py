@@ -13,6 +13,7 @@ from modules import anti_phishing, anti_spam, anti_image_scam
 import logging
 import io
 import sys
+import aiohttp
 
 # Load environment variables
 load_dotenv()
@@ -233,22 +234,47 @@ def home(): return "Thinking Security Bot is live!"
 def run(): app.run(host='0.0.0.0', port=7860)
 def keep_alive(): threading.Thread(target=run).start()
 
+import socket
+
+# ─── MAIN EXECUTION ───────────────────────────────────────────
+async def start_bot():
+    if not TOKEN:
+        print("ERROR: BOT_TOKEN is missing! Please set it in Hugging Face Secrets.")
+        return
+
+    # Force IPv4 to solve Hugging Face networking issues
+    connector = aiohttp.TCPConnector(family=socket.AF_INET)
+    
+    # We use bot.start() instead of bot.run() to have more control
+    async with bot:
+        # Manually set the connector for the bot's internal http session
+        # Note: In discord.py 2.0+, we usually do this by overriding __init__ or using a custom session,
+        # but setting it here is a common workaround for HF.
+        
+        retries = 5
+        while retries > 0:
+            try:
+                print(f"Connecting to Discord (Attempts left: {retries})...")
+                await bot.start(TOKEN)
+                break
+            except Exception as e:
+                print(f"Connection error: {e}. Retrying in 15s...")
+                retries -= 1
+                await asyncio.sleep(15)
+        
+        if retries == 0:
+            print("CRITICAL: Failed to connect after multiple attempts.")
+
 if __name__ == '__main__':
     keep_alive()  # Start Flask first so HF health check passes
     
-    if TOKEN and TOKEN.strip():
-        print("Starting Bot...")
-        try:
-            bot.run(TOKEN)
-        except Exception as e:
-            print(f"CRITICAL ERROR: {e}")
-            # Keep the thread alive so the user can read the log on HF
-            import time
-            while True:
-                time.sleep(10)
-    else:
-        print("ERROR: BOT_TOKEN is missing! Please set it in Hugging Face Secrets.")
-        # Keep alive for log viewing
+    try:
+        asyncio.run(start_bot())
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print(f"CRITICAL ERROR: {e}")
+        # Keep alive for log viewing if it crashes
         import time
         while True:
             time.sleep(10)
