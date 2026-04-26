@@ -1,3 +1,12 @@
+import socket
+
+# --- CRITICAL: FORCE IPv4 BEFORE ANY OTHER IMPORTS ---
+orig_getaddrinfo = socket.getaddrinfo
+def filtered_getaddrinfo(*args, **kwargs):
+    res = orig_getaddrinfo(*args, **kwargs)
+    return [r for r in res if r[0] == socket.AF_INET]
+socket.getaddrinfo = filtered_getaddrinfo
+
 import discord
 from discord.ext import commands
 from discord.ui import Button, View
@@ -11,23 +20,16 @@ import threading
 import logging
 import io
 import sys
-import socket
+import aiohttp
 from flask import Flask
 from modules import anti_phishing, anti_spam, anti_image_scam
-
-# --- FORCE IPv4 FOR HUGGING FACE ---
-orig_getaddrinfo = socket.getaddrinfo
-def filtered_getaddrinfo(*args, **kwargs):
-    res = orig_getaddrinfo(*args, **kwargs)
-    return [r for r in res if r[0] == socket.AF_INET]
-socket.getaddrinfo = filtered_getaddrinfo
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('BOT_TOKEN')
 LOG_CHANNEL_ID_RAW = os.getenv('LOG_CHANNEL_ID')
 LOG_CHANNEL_ID = int(LOG_CHANNEL_ID_RAW) if LOG_CHANNEL_ID_RAW and LOG_CHANNEL_ID_RAW.strip().isdigit() else None
-PREFIX = "!"
+PREFIX = os.getenv('PREFIX', '!')
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s: %(message)s')
@@ -47,7 +49,12 @@ class ThinkingSecurityBot(commands.Bot):
         )
 
     async def setup_hook(self):
-        print("Hooking into system...")
+        print("Hooking into system and syncing commands...")
+        try:
+            synced = await self.tree.sync()
+            print(f"Synced {len(synced)} slash commands.")
+        except Exception as e:
+            print(f"Sync Error: {e}")
 
 bot = ThinkingSecurityBot()
 
@@ -79,20 +86,18 @@ async def apply_strike(member, reason, message=None):
     embed.add_field(name="Total Strikes", value=str(strike_count), inline=True)
     if message:
         embed.add_field(name="Message", value=message.content[:1024], inline=False)
-        await message.delete()
+        try: await message.delete()
+        except: pass
     await send_log(member.guild, embed)
     if strike_count >= 3:
-        await member.timeout(discord.utils.utcnow() + datetime.timedelta(hours=24), reason="3+ Strikes")
+        try: await member.timeout(discord.utils.utcnow() + datetime.timedelta(hours=24), reason="3+ Strikes")
+        except: pass
 
 # --- EVENTS ---
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user} (ID: {bot.user.id})')
-    print('Thinking Security System Active')
-    try:
-        await bot.tree.sync()
-        print("Slash commands synced.")
-    except Exception as e: print(f"Sync error: {e}")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print("Thinking Security System Active and Online!")
 
 @bot.event
 async def on_message(message):
@@ -132,31 +137,30 @@ async def setup_logs(ctx, channel: discord.TextChannel):
 async def ping(ctx):
     await ctx.send(f"Pong! {round(bot.latency * 1000)}ms")
 
-@bot.hybrid_command(name="clear_chat")
-@commands.has_permissions(manage_messages=True)
-async def clear_chat(ctx, amount: int = 100):
-    await ctx.defer(ephemeral=True)
-    deleted = await ctx.channel.purge(limit=amount)
-    await ctx.send(f"Cleared {len(deleted)} messages.", ephemeral=True)
-
 # --- WEB SERVER ---
 app = Flask('')
 @app.route('/')
 def home(): return "Thinking Security Bot is live!"
-def run(): app.run(host='0.0.0.0', port=7860)
-def keep_alive(): threading.Thread(target=run).start()
+def run_web(): app.run(host='0.0.0.0', port=7860)
+
+# --- STARTUP ---
+async def start_bot():
+    if not TOKEN:
+        print("ERROR: BOT_TOKEN is missing!")
+        return
+    
+    # Force IPv4 in aiohttp session
+    connector = aiohttp.TCPConnector(family=socket.AF_INET)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        async with bot:
+            print("Starting bot session with IPv4 force...")
+            await bot.start(TOKEN)
 
 if __name__ == '__main__':
-    keep_alive()
-    if TOKEN:
-        print("Starting Bot...")
-        try:
-            bot.run(TOKEN)
-        except Exception as e:
-            print(f"CRITICAL ERROR: {e}")
-            import time
-            while True: time.sleep(10)
-    else:
-        print("ERROR: BOT_TOKEN is missing!")
+    threading.Thread(target=run_web, daemon=True).start()
+    try:
+        asyncio.run(start_bot())
+    except Exception as e:
+        print(f"FATAL ERROR: {e}")
         import time
         while True: time.sleep(10)
